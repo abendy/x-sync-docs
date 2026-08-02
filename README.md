@@ -7,18 +7,19 @@ Files here are intentionally not committed.
 
 | Date | Type | File | Description | Status |
 | --- | --- | --- | --- | --- |
+| 2026-04-27 | Pause | [pause-pending-dada-stream-spec-layer](./tasks/2026-04-27-pause-pending-dada-stream-spec-layer.md) | Feature work paused while the dada.stream spec layer is consolidated. Scraper migrates to `dada.stream/components/x-sync/` once reconciliation against the new spec layer is done. See `~/projects/dada.stream/.project/plans/2026-04-26-consolidation-index.md`. | 🟡 Active |
 | 2026-03-07 | Implementation | [sync-orchestrator-delete-coordinator-live-test-checklist](./tasks/2026-03-07-sync-orchestrator-delete-coordinator-live-test-checklist.md) | Live test checklist for sync orchestrator + delete coordinator behavior | 🟡 In Progress |
 | 2026-03-05 | Plan | [delete-coordinator-workflow](./plans/2026-03-05-delete-coordinator-workflow.md) | Shared delete coordinator with blocking/background modes for folder and no-folder sync | 🟡 In Progress |
+| 2026-02-19 | Plan | [sync-orchestrator-workflow](./plans/2026-02-19-sync-orchestrator-workflow.md) | Singleton orchestrator to serialize syncs with priority queue and watch mode | 🟡 In Progress |
 | 2026-02-20 | Plan | [thread-aware-enrichment-get-posts-by-ids-plan](./plans/2026-02-20-thread-aware-enrichment-get-posts-by-ids-plan.md) | Thread-aware enrichment plan with batch hydration and bounded context expansion | Implemented, partial |
 | 2026-03-07 | Task | [carmack-project-review](./tasks/2026-03-07-carmack-project-review.md) | Candid TypeScript + Temporal architecture review with simplification priorities | 🟢 Approved |
 | 2026-03-07 | Task | [carmack-code-review](./tasks/2026-03-07-carmack-code-review.md) | Carmack-Style Code Review: x-bookmarks-scraper | 🟢 Approved |
 | 2026-03-05 | Implementation | [deprecate-sync-enrich-local](./tasks/2026-03-05-deprecate-sync-enrich-local.md) | Remove local-only `sync enrich` in favor of workflow | 🟢 Approved |
 | 2026-03-05 | Plan | [deprecate-sync-enrich-local](./plans/2026-03-05-deprecate-sync-enrich-local.md) | Remove local-only `sync enrich` in favor of workflow | 🟢 Approved |
 | 2026-02-27 | Plan | [deprecate-sync-subcommands-and-move-state-to-workflow](./plans/2026-02-27-deprecate-sync-subcommands-and-move-state-to-workflow.md) | Deprecate sync subcommands, move state to workflow | 🟢 Approved |
-| 2026-02-19 | Plan | [sync-orchestrator-workflow](./plans/2026-02-19-sync-orchestrator-workflow.md) | Singleton orchestrator to serialize syncs with priority queue and watch mode | 🟢 Approved |
+| 2026-02-13 | Plan | [foundation-architecture-core-runtimes-capabilities](./plans/2026-02-13-foundation-architecture-core-runtimes-capabilities.md) ; [docs/adr/024-x-datasource-service-boundary.md](../docs/adr/024-x-datasource-service-boundary.md) ; [docs/spec/README.md](../docs/spec/README.md) ; [docs/spec/INDEX.md](../docs/spec/INDEX.md) | Foundation architecture for multi-source ingestion and routing — **needs reconciliation with dada.stream** (`~/projects/dada.stream/platform/contracts/`) before execution; also the vehicle to migrate this repo into `dada.stream/components/x-sync/` | 🔵 Planned |
 | 2026-03-06 | Plan | [typescript-ecosystem-upgrades](./plans/2026-03-06-typescript-ecosystem-upgrades.md) | Evaluate packages and services to replace hand-rolled infra and improve type safety | 🔵 Planned |
 | 2026-03-04 | Plan | [video-download-workflow](./plans/2026-03-04-video-download-workflow.md) | Video download workflow for native X videos and YouTube URLs | 🔵 Planned |
-| 2026-02-13 | Plan | [foundation-architecture-core-runtimes-capabilities](./plans/2026-02-13-foundation-architecture-core-runtimes-capabilities.md) ; [docs/adr/024-x-datasource-service-boundary.md](../docs/adr/024-x-datasource-service-boundary.md) ; [docs/spec/README.md](../docs/spec/README.md) ; [docs/spec/INDEX.md](../docs/spec/INDEX.md) | Foundation architecture for multi-source ingestion and routing — **needs reconciliation with dada.stream** (`~/projects/dada.stream/platform/contracts/`) before execution; also the vehicle to migrate this repo into `dada.stream/components/x-sync/` | 🔵 Planned |
 | 2026-02-22 | Plan | [enrichment-intents-policy-queue-plan](./plans/2026-02-22-enrichment-intents-policy-queue-plan.md) | Intent-driven queue + lane runtime expansion plan (parked for lean release) | 🔴 Deferred |
 | 2026-01-15 | Plan | [convex-integration-assessment](./plans/2026-01-15-convex-integration-assessment.md) | Convex as Temporal complement | 🔴 Deferred |
 | 2026-03-07 | Implementation | [delete-coordinator-full-ownership](./tasks/2026-03-07-delete-coordinator-full-ownership.md) | Collapse all Temporal delete execution into the coordinator (full ownership) | Complete |
@@ -78,3 +79,11 @@ Files here are intentionally not committed.
 | [folder-pagination](../docs/issues/folder-pagination.md) | Folder listing and folder bookmarks lack proper pagination |
 | [multi-folder-bookmarks](../docs/issues/multi-folder-bookmarks.md) | Delete endpoint removes bookmark globally, not per-folder |
 | [all-bookmarks-pagination-inconsistency](../docs/issues/all-bookmarks-pagination-inconsistency.md) | All-bookmarks endpoint can return a false terminal page at higher request sizes |
+
+## Status legend
+
+- 🗒️ **Planned** — in queue, not started
+- 👍 **Approved** — approved, merged, or active as a standing rule
+- ❇️ **Active / In Progress** — actively being worked on
+- ⏸️ **Paused / Deferred** — parked, not doing now
+- 🌟 **Complete** / **Implemented, partial**
