@@ -128,8 +128,9 @@ Reframed 2026-08-04: after 5 months of API drift, do not assume the March quirk 
 
 - [x] Run `pnpm dev sync <folder> --next`
 - [x] Confirm it queues ahead of normal work
-- [ ] Run `pnpm dev sync --watch`
-- [ ] Confirm discovery watch refreshes visible folders and re-enqueues them
+- [x] Run `pnpm dev sync --watch`
+- [x] Confirm discovery watch refreshes visible folders and re-enqueues them
+  - Session 8: verified via pause-snapshot (coordinator paused as backstop, orchestrator paused ~150ms after signalWithStart, before its startup refresh finished). Discovery refresh fetched and enqueued **133 visible folders**; `Completed Children: 0` — nothing executed; orchestrator cancelled to discard the queue, coordinator resumed (0 orphaned jobs). Interval *repetition* of discovery not observed live (30-min default; same per-subscription scheduler as the request watches verified in Sessions 4/5/7).
 - [x] Run `pnpm dev sync <folder> --watch`
 - [x] Confirm the exact folder request repeats on interval
 - [x] Run `pnpm dev sync --no-folders --watch`
@@ -164,7 +165,8 @@ Reframed 2026-08-04: after 5 months of API drift, do not assume the March quirk 
 
 Fold these into Chunk 2-5 runs rather than spending separate API calls.
 
-- [ ] Continue-as-new: drive the orchestrator across a continue-as-new boundary with queued work and/or an active watch subscription; confirm queue, watch state, and child counters survive (d35369a regression check)
+- [x] Continue-as-new: drive the orchestrator across a continue-as-new boundary with queued work and/or an active watch subscription; confirm queue, watch state, and child counters survive (d35369a regression check)
+  - Session 8: CAN fired at exactly child #50 (threshold), new run kept RUNNING. Verified post-CAN: watch subscription intact (1-min interval), Completed Children reset and counting fresh (the d35369a fix), Total Synced 1406 carried, Recent Children spanning the boundary (old-run sync-50 → new-run sync-1/2), child IDs restarting without collision. PASSED.
 - [x] Worker restart: kill the worker mid-sync; restart; confirm the sync resumes and completes without data loss (Session 7: killed mid-rate-limit-pause; restarted worker replayed both singletons with timer/counters/queue intact and the durable timer fired on schedule at 01:21:57)
 - [x] Delete-coordinator control: `workflow pause delete-coordinator` mid-drain, confirm the drain halts; `resume`, confirm it continues; status output stays truthful throughout
   - Session 7 (01:37): paused mid-active-window — deletes stopped at the in-flight item (05:37:15), verified 15s+ of silence; status correctly showed execution `RUNNING` / progress `paused` with truthful counters (130 deleted). Resume → deletes flowing again within ~1s, status `running`. PASSED.
@@ -321,3 +323,12 @@ Approved folders (historical local totals): IDE (1001), AI (713), Covid (514), N
 - **Measured delete quota: 50 per 15-min window (~200/hr)** — sets the wall-clock expectation for full drains; hundreds of live bookmarks per folder means many hours. Orchestrator/coordinator handle the cadence autonomously.
 - Note for Chunk 6: the durable pause is a natural worker-restart test point (kill worker mid-pause, confirm the timer survives).
 - **Chunk 6 worker-restart test (PASSED)**: killed and restarted the worker mid-pause (~01:10). Restarted worker replayed both singletons cleanly: coordinator paused with `Rate Limit Reset: 1:21:49 AM` intact and counters preserved (40 deleted / 0 failed), orchestrator queue of 6 + active child untouched. The durable timer then fired on schedule — backlog + current-batch jobs resumed at 01:21:57 (~8s after reset) on a worker process that did not exist when the timer was set. Status output surfacing the reset time post-restart is a nice observability win.
+
+### Session 8 (2026-08-04 morning) — drain completion, CAN, discovery snapshot
+
+- All 7 approved folders fully drained overnight: **1406 total synced**, coordinator soak ended at 847+ deletes / 0 failed across ~17 quota windows — sustained regression-green on both fixes.
+- CAN test passed (details under Chunk 6): fired at exactly child #50, all state carried, counter reset correct.
+- `workflow watch-stop` first real outing: listed the live IMMIGRATION subscription, cleared it, orchestrator completed cleanly.
+- Discovery-watch mechanism verified via pause-snapshot (details under Chunk 3): **133 visible folders** enqueued, zero executed, clean teardown (orchestrator cancelled, coordinator resumed with 0 orphaned jobs).
+- Recon: all-bookmarks dry-run still returns full pages with `nextToken=present` — remaining live bookmarks sit in ~126 unapproved folders plus unfoldered items.
+- Remaining open: Chunks 2+5 only. Gate is now purely a scope decision: full-drain-first vs accept membership loss vs hybrid.
