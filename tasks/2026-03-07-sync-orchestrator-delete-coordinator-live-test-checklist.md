@@ -1,6 +1,6 @@
 # Task: Sync Orchestrator + Delete Coordinator Live Test Checklist
 
-**Status:** In Progress
+**Status:** Complete (Chunks 2+5 deferred — no no-folder delete runs while folders hold data, pending classifier layer or full folder-first drain)
 **Created:** 2026-03-07
 **Related Plans:**
 
@@ -26,6 +26,23 @@ Do a real Temporal behavior pass after the recent workflow changes:
 - delete work goes through the delete coordinator
 - watch and `--next` behavior works the way the CLI now describes it
 - queue behavior matches the current dedup and priority rules
+
+## Final Outcome (2026-08-04)
+
+Live testing ran March 2026 (Sessions 1-5) and resumed 2026-08-03/04 after a 5-month idle gap (Sessions 6-8). Everything runnable passed; the full evidence trail is in the per-chunk annotations and Session Log below.
+
+**Verified green (live, against the real account):** orchestrator serialization; queue dedup + priority promotion; `--next` and `--next --watch` urgency incl. urgent repeats; folder/no-folder/discovery watch mechanics (discovery via pause-snapshot: 133 folders enqueued, zero executed); active-duplicate behavior (recorded, acceptable); coordinator ownership of all delete phases; durable rate-limit pause/resume (~50 deletes per 15-min window measured); coordinator pause/resume mid-drain; worker restart mid-pause (timer survived); continue-as-new at child #50 with full state carry-over. Soak: 1,406 bookmarks synced, ~850 deletes, 0 failures across ~17 quota windows.
+
+**Regressions found + fixed during Session 6-7 testing:**
+
+- `4217086` — Temporal backlog delete jobs were a silent no-op (empty `bookmarks: []` treated as explicit scope) since 2cd4879.
+- `dff7fdd` — coordinator fast-failed every queued delete on 429 instead of pausing durably (missing `extractRateLimitResetAt` unwrapper).
+
+**Landed alongside (via external worker agents):** `b3732cc` `workflow watch-stop` CLI; `ada31e9` hermetic test logging.
+
+**Deferred (the only open items):** Chunks 2+5 (no-folder edge path + overlap). Hard gate set by owner 2026-08-04: **no no-folder delete-enabled runs while any folder holds live bookmarks** — folder grouping must survive until a classifier layer exists. Run plan is documented in the Chunk 2 section, ready when the gate opens.
+
+**Optional follow-ups recorded (neither urgent):** orchestrator active-run enqueue guard (Chunk 4 verdict); orchestrator error aggregation (single `Last Error` line hid ~80 failures during the storm).
 
 ## Current Expected Behavior
 
@@ -115,7 +132,9 @@ For each: **Observed** / **Expected** / **Verdict (acceptable | follow-up)** / *
 - [x] Confirm normal no-folder delete handoff goes to `delete-coordinator`
 - [x] Confirm `workflow status delete-coordinator` is useful during the run
 
-### Chunk 2: No-Folder Edge Path (observational; runs merged with Chunk 5)
+### Chunk 2: No-Folder Edge Path (DEFERRED 2026-08-04 — see gate below; runs merged with Chunk 5)
+
+**Gate (owner decision, 2026-08-04): no no-folder delete-enabled runs while any folder holds live bookmarks.** Folder grouping must be preserved until a classifier layer exists to recover it. Unblocks when either (a) the classifier layer lands, or (b) all visible folders have been drained folder-first. Run plan below stays ready.
 
 Reframed 2026-08-04: after 5 months of API drift, do not assume the March quirk reproduces. Run against the real unfoldered backlog **only after folder syncs have drained** (see rules of engagement).
 
@@ -151,7 +170,7 @@ Reframed 2026-08-04: after 5 months of API drift, do not assume the March quirk 
   - **Expected**: matches the documented "no active-run guard" caveat exactly.
   - **Verdict**: acceptable for now — self-healing and cheap. Optional follow-up: dedupe/ignore enqueues matching `state.currentRequest` (or treat as promote-only), low priority.
 
-### Chunk 5: Overlap / Operational Reality
+### Chunk 5: Overlap / Operational Reality (DEFERRED 2026-08-04 — same gate as Chunk 2)
 
 - [ ] Start a no-folder sync that hands delete off in `background`
 - [ ] While background delete is still draining, enqueue a folder sync
@@ -171,13 +190,13 @@ Fold these into Chunk 2-5 runs rather than spending separate API calls.
 - [x] Delete-coordinator control: `workflow pause delete-coordinator` mid-drain, confirm the drain halts; `resume`, confirm it continues; status output stays truthful throughout
   - Session 7 (01:37): paused mid-active-window — deletes stopped at the in-flight item (05:37:15), verified 15s+ of silence; status correctly showed execution `RUNNING` / progress `paused` with truthful counters (130 deleted). Resume → deletes flowing again within ~1s, status `running`. PASSED.
 
-## Notes To Capture While Testing
+## Notes To Capture While Testing (answered 2026-08-04, Sessions 6-8)
 
-- Whether CLI output clearly tells the user who owns current work
-- Whether `workflow status sync-orchestrator` and `workflow status delete-coordinator` are enough without opening Temporal Web
-- Whether worker logs feel informative without being noisy
-- Any surprising queue duplication or watch-repeat behavior
-- Any friction from the lack of active-job preemption
+- **Whether CLI output clearly tells the user who owns current work** — Mostly yes. Sync children correctly show no delete counts post-refactor (ownership moved), and `delete-coordinator` status shows queue/progress/cumulative counters. One gap: the orchestrator surfaces only a single `Last Error` line even when ~80 deletes failed (observed during the storm) — recorded as optional follow-up (error aggregation).
+- **Whether the two `workflow status` commands are enough without Temporal Web** — Yes, throughout. Temporal Web was never opened across three sessions. Status even surfaces the pending rate-limit reset time after a worker restart. Raw `temporal workflow show/describe` was used only for history-level verification (idle-park check, CAN runId rollover) — reasonable for test forensics, not needed operationally.
+- **Whether worker logs feel informative without being noisy** — Informative; per-delete INFO lines are high-volume but greppable, and the JSONL file format works well for tailing. The only true noise was the (since-fixed) fast-fail storm. Post-fix, one pause WARN per quota window is exactly right.
+- **Any surprising queue duplication or watch-repeat behavior** — None beyond the documented no-active-run-guard duplicate (Chunk 4, verdict: acceptable). Dedup, promotion, urgent ordering, and watch repeats all behaved to spec in live runs.
+- **Any friction from the lack of active-job preemption** — Not observed as real friction in these sessions; blocking jobs consistently outranked queued background work. The direct probe (folder sync arriving mid-background-drain) is part of deferred Chunk 5, so this stays a residual unknown rather than a confirmed non-issue.
 
 ## Session Log
 
