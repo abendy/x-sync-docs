@@ -1,0 +1,208 @@
+# Plan: Thread-Aware Enrichment with `get-posts-by-ids`
+
+**Status:** Draft
+**Created:** 2026-02-20
+**Source:** Endpoint and workflow assessment from current repo + X API docs
+
+## Context
+
+Folder bookmark sync currently fetches ID-only records (about 20 at a time), then enrichment hydrates each tweet one-by-one. We want to improve default enrichment so bookmarked tweets that belong to threads/conversations can preserve useful context, without exploding cost or runtime.
+
+## Confirmed Current State
+
+1. We are not currently using batch post lookup (`get-posts-by-ids`).
+2. Enrichment uses single tweet lookup (`GET /2/tweets/:id`) per record.
+3. Folder bookmark fetch remains ID-only and requires follow-up enrichment for full data.
+4. We already persist relationship primitives (`conversation_id`, `referenced_tweets` edges), but we do not actively expand full conversation trees or quote sets.
+
+### Code Evidence
+
+- Bookmark + tweet endpoint builders: `src/lib/api/client/endpoints.ts`
+- Single-tweet enrichment path: `src/lib/api/x-api-client.ts`
+- Enrichment activity orchestration: `src/temporal/activities/store.ts`
+- Enrichment loop processing one record at a time: `src/temporal/workflows/enrich/pass.ts`
+- Data completeness behavior for folder endpoint (`ids_only`): `src/sources/x-api.ts`
+- Folder endpoint limitation note: `docs/issues/folder-endpoint-limitation.md`
+- Existing edge persistence (`referenced_tweets`): `src/lib/db/tweet-write-repo.ts`
+
+## Assessment
+
+### Is `get-posts-by-ids` a good enrich candidate?
+
+Yes. For folder-based batches, it is a strong fit:
+
+1. It aligns with the existing workload shape (we already have a small set of IDs).
+2. It can reduce enrichment request count by batching IDs (up to endpoint limit).
+3. It should reduce enrich latency and simplify rate-limit pressure per pass.
+
+### Can it fully solve thread/reply/quote expansion?
+
+Partially:
+
+1. It hydrates known IDs well.
+2. It does not discover unknown replies in a conversation by itself.
+3. It does not replace dedicated quote retrieval; quote timelines still need quote-specific endpoint calls.
+4. Full conversation expansion needs `conversation_id`-driven search plus guardrails.
+
+## Proposed Enrichment Levels
+
+### Level 0: `atomic` (default baseline)
+
+1. Hydrate only bookmarked tweet IDs.
+2. Include immediate referenced tweets returned by expansions.
+3. No traversal/search fan-out.
+
+### Level 1: `origin` (light context)
+
+1. For replies, walk parent chain (`replied_to`) toward root.
+2. Stop at strict depth cap and record cap.
+3. Prioritize preserving "how this tweet fits in thread" without broad crawl.
+
+### Level 2: `conversation` (bounded expansion)
+
+1. Use `conversation_id` search to fetch sibling/descendant replies.
+2. Apply hard limits (records per conversation, pages, time window).
+3. Treat as opt-in or profile-based due to fan-out risk.
+
+### Level 3: `quotes` (bounded quote expansion)
+
+1. Fetch quote posts for bookmarked tweets (or origin tweet).
+2. Apply hard limits and optional recency filters.
+3. Keep separate from conversation mode to control cost and behavior.
+
+## Architecture Plan
+
+### Phase 1: Batch hydration foundation (`get-posts-by-ids`)
+
+1. Add client endpoint + method for batched tweet lookup by IDs.
+2. Add datasource batch detail fetch API (`fetchTweetDetailsBatch(ids)`).
+3. Update enrich pass to process batches first, then persist results per tweet.
+4. Maintain current unavailable/error semantics for per-ID outcomes.
+
+### Phase 2: Context policy and settings
+
+1. Add enrich policy config (mode + limits), defaulting to `atomic`.
+2. Add telemetry counters per mode (`hydrated`, `originExpanded`, `conversationExpanded`, `quotesExpanded`, `skippedByLimit`).
+3. Add explicit docs for cost/latency tradeoffs by mode.
+
+### Phase 3: Origin chain expansion
+
+1. Resolve immediate `replied_to` ancestry for each candidate.
+2. Fetch missing ancestor IDs in batch where possible.
+3. Persist ancestry edges and stop when root/caps reached.
+
+### Phase 4: Conversation and quotes expansion (opt-in)
+
+1. Implement `conversation_id` search-based enrichment with hard caps.
+2. Implement quote fetch flow with hard caps.
+3. Keep both behind explicit mode flags (not default-on initially).
+
+## Guardrails
+
+1. Hard per-bookmark and per-conversation fetch caps.
+2. Time-window cap for conversation/quote discovery.
+3. Budget-aware stop conditions for a single enrich run.
+4. Deterministic ordering and idempotent writes.
+5. Safe fallback to `atomic` behavior when limits/errors trigger.
+
+## Success Criteria
+
+1. Folder enrich request count decreases materially versus per-ID lookup baseline.
+2. `atomic` mode preserves current behavior quality with lower request overhead.
+3. `origin` mode reconstructs parent chain for reply bookmarks at high success rate.
+4. `conversation`/`quotes` modes remain bounded and predictable under limits.
+
+## Open Questions
+
+1. Should `origin` become the default mode, or remain opt-in until we collect cost data?
+2. What are acceptable per-bookmark caps for ancestry depth and total related posts?
+3. Should conversation/quote expansion run inline with enrich workflow or as separate child workflows?
+4. Do we want per-folder policy overrides (for high-signal folders)?
+
+## Initial Implementation Targets
+
+1. `src/lib/api/client/endpoints.ts`
+2. `src/lib/api/x-api-client.ts`
+3. `src/lib/api/types.ts`
+4. `src/sources/types.ts`
+5. `src/sources/x-api.ts`
+6. `src/temporal/workflows/enrich/pass.ts`
+7. `src/temporal/activities/store.ts`
+8. `docs/cost-model.md`
+9. `README.md`
+
+## References
+
+1. <https://docs.x.com/x-api/posts/get-posts-by-ids>
+2. <https://docs.x.com/x-api/fundamentals/conversation-id>
+3. <https://docs.x.com/x-api/posts/search/introduction>
+4. <https://docs.x.com/x-api/posts/get-quoted-posts>
+5. <https://docs.x.com/x-api/fundamentals/rate-limits>
+
+## Notes
+
+This plan intentionally separates "hydration batching" from "context expansion." Batch hydration should land first as a low-risk improvement, then context modes can be layered in with strict caps and observability.
+
+## Review Notes (2026-02-21)
+
+### Overall Assessment
+
+The plan direction is strong and correctly sequences low-risk batching before higher fan-out expansion. It aligns with the current architecture and avoids an unsafe "do everything at once" migration.
+
+### Required Clarifications Before Implementation
+
+1. Define the exact batch contract for partial failures.
+   - `fetchTweetDetailsBatch(ids)` should return per-ID outcomes (`ok | unavailable | failed`) rather than a single success/failure result.
+   - Include retry classification (`retryable` vs `terminal`) so workflow retry behavior is deterministic and explicit.
+2. Specify hard limits as concrete config keys and defaults.
+   - Add names/defaults for: `maxIdsPerBatch`, `maxOriginDepth`, `maxConversationPosts`, `maxConversationPages`, `maxQuotePosts`, `maxRelatedPostsPerSeed`, `maxRelatedPostsPerRun`.
+   - Without explicit defaults, behavior can diverge across environments.
+3. Define discovered-tweet persistence semantics.
+   - Clarify whether conversation/quote discovered tweets are stored as tweet records only, or also become bookmarks (should remain tweet-only).
+   - Clarify whether unavailable marking applies only to requested seed IDs or also discovered related IDs.
+4. Add explicit non-goals in this plan revision.
+   - Example: "No full graph traversal," "No recursive child-workflow fan-out in Phase 1/2," "No default-on conversation/quote expansion."
+
+### Temporal + Workflow Design Notes
+
+1. Keep all network access and pagination inside activities; workflows should only orchestrate and evaluate deterministic results.
+2. Avoid a single long-running activity for conversation/quote expansion.
+   - Prefer page/batch-sized activity calls to preserve heartbeat/retry control and reduce replay blast radius.
+3. Add a run-level budget object tracked in workflow state.
+   - Decrement by API calls and discovered records; short-circuit to `atomic` fallback when budget is exhausted.
+4. Define deterministic ordering rules for ID processing.
+   - Sort IDs before batching and persist "seen" sets per pass to prevent duplicate fetches and non-deterministic processing order.
+
+### TypeScript/API Surface Notes
+
+1. Introduce batch types in `src/lib/api/types.ts` and `src/sources/types.ts` first, then wire implementation.
+   - Suggested shape: `FetchTweetDetailsBatchResult { byId: Record<string, ...>; rateLimit? }`.
+2. Keep single-ID enrichment API during transition.
+   - Add batch method alongside existing `enrichRecord`/`fetchTweetDetails` and migrate callers incrementally to avoid broad breakage.
+3. Add endpoint limit constant in one place.
+   - Use a shared constant for `get-posts-by-ids` max IDs per request to avoid drift across client/workflow logic.
+
+### Data Integrity and Duplication Risks
+
+1. Deduplicate writes between seed tweets and included/related tweets in the same run.
+   - Ensure one canonical upsert path and avoid multiple competing merge rules.
+2. Preserve edge write idempotency for newly discovered context.
+   - Explicitly state that `referenced_tweets` edges are upsert-only and safe on retries.
+3. Ensure fields-version behavior is documented for batch-enriched tweets.
+   - Phase 1 should confirm that batch hydrated tweets advance `fields_version` consistently with current single-tweet enrichment.
+
+### Observability and Rollout
+
+1. Add acceptance metrics with target thresholds.
+   - Example: request reduction %, p95 enrich pass duration, per-mode average API calls, unavailable/failed rates.
+2. Add a staged rollout gate.
+   - Phase 1: `atomic` batch only.
+   - Phase 2+: enable `origin` for a small subset/profile, then widen based on observed cost/latency.
+3. Add structured logs keyed by `mode`, `seedTweetId`, `conversationId`, and `budgetStopReason` for debugging.
+
+### Test Plan Gaps
+
+1. Add unit tests for batch response normalization (mixed success/unavailable/error in same batch).
+2. Add workflow tests for budget stop conditions and deterministic ordering.
+3. Add integration tests confirming no duplicate tweet/bookmark rows when related tweets overlap across seeds.
+4. Add regression test proving `atomic` mode output parity (except request count improvements) vs current baseline.
