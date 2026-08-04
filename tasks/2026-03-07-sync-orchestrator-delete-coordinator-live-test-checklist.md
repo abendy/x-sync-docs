@@ -54,20 +54,55 @@ Do a real Temporal behavior pass after the recent workflow changes:
   - queued blocking work outranks queued background work
   - but a blocking folder delete does not interrupt an already running background no-folder delete
 
-## Current Status
+## Current Status (revised 2026-08-04)
 
-- Next up later with `--no-delete`: Chunk 3 `<folder> --next --watch` and Chunk 4 active-duplicate testing.
-  Note: these are most meaningful once a folder has `20-40+` live bookmarks again, so the sync runs long enough for queue order and mid-flight duplicate behavior to be observable.
-- After that: `pnpm dev sync --watch` discovery watch.
-  Note: most useful when multiple visible folders exist and there is some chance of folder-list churn between watch intervals.
-- Chunk 2: No-folder edge path.
-  Note: only interesting when the live all-bookmarks endpoint still reproduces the suspicious `100 -> short page + no nextToken` behavior.
-  Blocker: folder sync work should be finished first, because this depends on a real delete-enabled no-folder run that can remove bookmarks from X before their folder membership has been archived.
-- Chunk 5: Overlap / operational reality.
-  Note: this needs a delete-enabled no-folder run large enough to keep `delete-coordinator` busy after the sync child completes.
-  Blocker: folder sync work should be finished first, because this also depends on a real delete-enabled no-folder run that can remove bookmarks from X before their folder membership has been archived.
+Project was idle ~5 months after Session 5. Reality has changed:
+
+- The account has accumulated a large live backlog (dozens of bookmarks/week since March) — likely 300+, possibly past the ~800 API window. Data volume is no longer the constraint; the real backlog is the test bed.
+- The local DB view is stale (9 live bookmarks recorded locally). A recon pass is needed before trusting any local counts.
+- Landed since the March sessions: all Temporal delete phases route through `delete-coordinator` (2cd4879), child-counter reset on continue-as-new (d35369a), better-sqlite3 major bump, `pnpm dev backup` command (6c9cef3).
+- Code re-verified 2026-08-03: the two "not yet" caveats in Expected Behavior above still hold (no active-run enqueue guard in the orchestrator; no active-job preemption in the delete coordinator).
+- The March "Blocker: folder sync work should be finished first" notes are cleared — that work completed 2026-03-07. The ordering discipline itself still stands, restated below.
+
+### Rules of engagement (live account)
+
+- **Backup before every delete-enabled session**: `pnpm dev backup` (writes to `./data/backups/`).
+- **All proper live runs are folder syncs until folders are fully drained.** Delete is global and a no-folder sync does not preserve which folder a post was saved under — a no-folder delete run can destroy folder membership that was never archived. No-folder usage before then is limited to `--dry-run` / `--no-delete` recon. Delete-enabled no-folder runs (Chunks 2+5) come only after folder drains are complete.
+- **Audit `delete_queue` before the first delete-enabled run** — it holds 5-month-old queued deletes that the backlog phase will fire immediately.
+- Use `--no-delete` for ordering/queue assertions (Chunks 3/4); spend real deletes only where deletion is the subject (Chunks 2/5).
+- Draining hundreds of backlogged bookmarks means hundreds of rate-limited delete calls — plan long sessions.
+
+### Revised execution order
+
+1. **Chunk 0: Re-baseline** (new, below) — env bring-up, auth check, state audit, backup, recon.
+2. **Chunk 3 + 4 remainder** — real folder syncs (delete-enabled drain), `--next --watch` and mid-flight duplicate enqueue observed against naturally long runs; pause-snapshot (Session 3 technique) as fallback if runs turn out short.
+3. **Chunks 2 + 5 merged** — no-folder delete-enabled runs against the real unfoldered backlog; Chunk 2 reframed as observational (record whether the suspicious terminal page reproduces and whether the limitation canary fires; do not block Chunk 5 on reproduction).
+4. **Chunk 6: Durability** (new, below) — continue-as-new, worker restart, coordinator pause/resume mid-drain, folded into the above runs rather than separate API-spending runs.
+
+### Status at end of Session 7 (2026-08-04, ~02:45)
+
+- Done: Chunk 0, Chunk 1 (revalidated), Chunk 3 (all but discovery watch), Chunk 4 (all, verdicts recorded), Chunk 6 worker-restart + coordinator pause/resume. Two regressions found+fixed+verified live (4217086 backlog no-op, dff7fdd rate-limit fast-fail). `watch-stop` CLI landed (b3732cc) and test-log hermeticity fixed (ada31e9) via external worker agents.
+- Self-executing: 7-folder drain (2 done: IMMIGRATION, DEVELOPER ENVIRONMENT; Finance active; NY/Covid/AI/IDE queued). CAN test armed — `IMMIGRATION --no-delete --watch-interval 1` subscription will accumulate ~1 child/min once the drain queue empties; CAN fires at child #50; verify with `temporal workflow describe`/history, then `workflow watch-stop`.
+- Residual analysis — delete_queue backoff (2s base, 30s cap) vs 15-min rate-limit windows: miscalibrated only for 429s, and post-dff7fdd no 429 reaches `recordDeleteFailure` on either the Temporal or local path (both detect and pause). Storm rows (attempts 1-4, next_attempt_at long past) drain via their folders' backlog phases. Verdict: no change needed; revisit only if a 429 ever surfaces in `last_error` again.
+- Gated on drain completion: Chunks 2+5 (no-folder delete-enabled runs — unsafe until all folder membership archived, since all-bookmarks delete can hit foldered items). Run plan when unblocked: backup first; `sync --no-folders --limit 100` (Chunk 2 observational + canary); while its background delete drains, enqueue a folder sync and record overlap behavior (Chunk 5); fold in `workflow status delete-coordinator` usefulness notes.
+- Parked for owner sign-off: discovery watch (`sync --watch`) — enqueues delete-enabled syncs for ALL visible folders, beyond the approved 7.
+
+### Recording template for "observe and decide" items
+
+For each: **Observed** / **Expected** / **Verdict (acceptable | follow-up)** / **Follow-up task link if any**.
 
 ## Live Checklist
+
+### Chunk 0: Re-baseline After Idle Period (added 2026-08-04)
+
+- [x] `pnpm lint`, `pnpm typecheck`, `pnpm test` all pass on current `develop`
+- [x] Auth still valid (tokens may have expired over 5 idle months); re-auth if needed
+- [x] Audit `delete_queue` contents; record and decide keep-or-clear before any delete-enabled run
+- [x] `pnpm dev backup` completes; `pnpm dev status` reminder clears
+- [x] Temporal server + worker up; no stale workflow executions surprising us
+- [x] Recon: size the live backlog (dry-run / small `--no-delete` fetch + folder list refresh); record live counts vs stale local view
+- [x] Smoke re-run of one small Chunk-1-style folder sync to revalidate the March checkmarks against the current code
+  - Found + fixed a real regression: Temporal backlog delete phase was a silent no-op since 2cd4879 (see Session 6)
 
 ### Chunk 1: Baseline Regular Sync
 
@@ -80,11 +115,13 @@ Do a real Temporal behavior pass after the recent workflow changes:
 - [x] Confirm normal no-folder delete handoff goes to `delete-coordinator`
 - [x] Confirm `workflow status delete-coordinator` is useful during the run
 
-### Chunk 2: No-Folder Edge Path
+### Chunk 2: No-Folder Edge Path (observational; runs merged with Chunk 5)
+
+Reframed 2026-08-04: after 5 months of API drift, do not assume the March quirk reproduces. Run against the real unfoldered backlog **only after folder syncs have drained** (see rules of engagement).
 
 - [ ] Run `pnpm dev sync --no-folders --limit 100`
-- [ ] Confirm the suspicious terminal-page path still works if reproduced
-- [ ] Confirm no-folder delete escalates to `blocking` when delete-reveal is needed
+- [ ] Record whether the suspicious `100 -> short page + no nextToken` terminal page reproduces; note any limitation-canary observations either way
+- [ ] If reproduced: confirm no-folder delete escalates to `blocking` when delete-reveal is needed
 - [ ] Confirm final fetched/stored/deleted counts still make sense
 
 ### Chunk 3: Priority + Watch
@@ -97,8 +134,8 @@ Do a real Temporal behavior pass after the recent workflow changes:
 - [x] Confirm the exact folder request repeats on interval
 - [x] Run `pnpm dev sync --no-folders --watch`
 - [x] Confirm the exact no-folder request repeats on interval
-- [ ] Run `pnpm dev sync <folder> --next --watch`
-- [ ] Confirm each repeat stays urgent, as currently designed
+- [x] Run `pnpm dev sync <folder> --next --watch`
+- [x] Confirm each repeat stays urgent, as currently designed (Session 7: initial IMMIGRATION child and its 1-min watch repeat both ran `[urgent]`, jumping the normal queue)
 
 ### Chunk 4: Queue Behavior
 
@@ -106,9 +143,12 @@ Do a real Temporal behavior pass after the recent workflow changes:
 - [x] Confirm they run one at a time in expected priority order
 - [x] Queue the same folder sync twice while it is still queued
 - [x] Confirm it is deduped or promoted instead of duplicated
-- [ ] Queue the same folder sync again while it is already running
-- [ ] Observe current behavior and record it explicitly
-- [ ] Decide whether the current behavior is acceptable or should become a follow-up task
+- [x] Queue the same folder sync again while it is already running
+- [x] Observe current behavior and record it explicitly
+- [x] Decide whether the current behavior is acceptable or should become a follow-up task
+  - **Observed**: duplicate of the actively running AI request was enqueued as a second `[normal]` queue entry; after the active run completed it ran as its own child, re-fetched the same page, `new=0`, `stop=no-progress` (~11s wasted, no data harm).
+  - **Expected**: matches the documented "no active-run guard" caveat exactly.
+  - **Verdict**: acceptable for now — self-healing and cheap. Optional follow-up: dedupe/ignore enqueues matching `state.currentRequest` (or treat as promote-only), low priority.
 
 ### Chunk 5: Overlap / Operational Reality
 
@@ -119,6 +159,15 @@ Do a real Temporal behavior pass after the recent workflow changes:
   - delete-coordinator queue order
   - whether folder progress is delayed behind active background delete
 - [ ] Record whether current behavior is acceptable for now
+
+### Chunk 6: Durability (added 2026-08-04)
+
+Fold these into Chunk 2-5 runs rather than spending separate API calls.
+
+- [ ] Continue-as-new: drive the orchestrator across a continue-as-new boundary with queued work and/or an active watch subscription; confirm queue, watch state, and child counters survive (d35369a regression check)
+- [x] Worker restart: kill the worker mid-sync; restart; confirm the sync resumes and completes without data loss (Session 7: killed mid-rate-limit-pause; restarted worker replayed both singletons with timer/counters/queue intact and the durable timer fired on schedule at 01:21:57)
+- [x] Delete-coordinator control: `workflow pause delete-coordinator` mid-drain, confirm the drain halts; `resume`, confirm it continues; status output stays truthful throughout
+  - Session 7 (01:37): paused mid-active-window — deletes stopped at the in-flight item (05:37:15), verified 15s+ of silence; status correctly showed execution `RUNNING` / progress `paused` with truthful counters (130 deleted). Resume → deletes flowing again within ~1s, status `running`. PASSED.
 
 ## Notes To Capture While Testing
 
@@ -232,3 +281,43 @@ Do a real Temporal behavior pass after the recent workflow changes:
   - `--limit 5` constrains each watched run to a small visible all-bookmarks window
   - newly added bookmarks can enter that watched window on the next cycle
   - `--no-delete` preserves those bookmarks on X during watched no-folder runs
+
+### Session 6 (2026-08-04) — Chunk 0 re-baseline
+
+- Toolchain: `pnpm lint`, `pnpm typecheck`, `pnpm test` all green on `develop` (471 tests) after the backup-command and pnpm-workspace commits (b1e65f8, 6c9cef3).
+- Auth: `pnpm dev auth verify` succeeded — OAuth refresh worked after 5 idle months.
+- `delete_queue` audit: 7 rows, all from 2026-03-07/08, `attempts=0`, no errors — 2 in `IDE`, 5 unfoldered. These are the `--no-delete` backlog from Sessions 4/5 (including the test bookmarks added from the iOS app). All already archived locally. **Decision: keep** — draining them on the next delete-enabled run is the designed backlog-clear behavior.
+- Backup: `pnpm dev backup` wrote `data/backups/bookmarks-20260804T042347Z.db`.
+- Temporal: dev server restarted against the persisted `.temporal/temporal.db`. Only one execution still running: the `delete-coordinator` singleton (started 2026-03-07). History tail showed it idle-parked since 2026-03-07T23:26 with no in-flight work. Kept it, started the worker with current code, and the status query **replayed the 5-month-old history cleanly**: `idle, Queue: 0, Completed Jobs: 11, Total Deleted: 30, Total Failed: 0`. Bonus durability data point (Chunk 6): singleton survived a 5-month idle gap and a better-sqlite3 major bump.
+- No orchestrator execution and no watch subscriptions survived — no surprise sync work on worker start.
+- Recon: `sync --no-folders --dry-run --limit 10` fetched 10 with `completeness=full, nextToken=present` — a real multi-page live backlog exists, as expected from ~5 months of saves. Folder refresh from the API shows several folders created since March (IDs in the 2030+ range: WOKE, LEFT DELUSION, BLM, BLACKS...), so discovery-watch testing now has genuine folder churn available.
+- Smoke run 1: `pnpm dev sync IDE --pages 1` — fetched/stored/enriched 20, media 8, current-batch deleted 20 through the coordinator. **But the backlog job ran with 0 items and left the 2 queued IDE rows untouched.**
+- Root cause: `page-runner.ts` submitted backlog jobs with `bookmarks: []`; `InlineDeleteCoordinator.resolveBookmarks` treated the empty array as an explicit scope (truthy `if (scope.bookmarks)`) and never called `getDeleteBacklog`. **Every Temporal backlog delete phase since 2cd4879 was a silent no-op.** March Chunk 1 checkmarks predated that refactor by hours; unit tests all mocked an empty backlog, so nothing caught it. This is precisely what the smoke re-run item existed to catch.
+- Fix (4217086): empty list no longer counts as explicit scope; backlog submissions omit `bookmarks`; regression test added (backlog job with `bookmarks: []` must resolve via `getDeleteBacklog`).
+- Operational note: the fix changes activity scheduling inside the coordinator, so the running singleton's history (containing the no-op backlog job) would non-determinism-error on replay. Terminated `delete-coordinator` (final counters: 13 jobs / 50 deleted / 0 failed) and restarted the worker on fixed code. **Policy going forward: behavior changes to coordinator/orchestrator workflow code require terminating the affected singleton in dev.**
+- Smoke run 2 (fixed code): `Backlog ready: 2 queued deletes` → both March test bookmarks deleted from X; current-batch deleted the next 20. Final: `delete_queue` 7 → 5 (only unfoldered rows remain, correctly out of scope for a folder sync), fresh coordinator `2 jobs / 22 deleted / 0 failed`, enrich 20/20, media 9, no failures.
+- Chunk 0 complete. Next: Chunk 3/4 remainder on large folders (IDs from account owner).
+
+### Session 7 (2026-08-04) — Chunk 3/4 on approved folder drains
+
+Approved folders (historical local totals): IDE (1001), AI (713), Covid (514), NY (479), Finance (181), DEVELOPER ENVIRONMENT (59), IMMIGRATION (4).
+
+- **Discovery watch deferred**: code check confirmed `refreshFolderQueue` enqueues a delete-enabled sync for **every** visible folder (`noDelete: false`) — running `sync --watch` authorizes draining the whole account, not just the approved list. Needs explicit owner sign-off; left unchecked.
+- **UX finding**: the orchestrator supports `stopWatch` but no CLI command sends it — the only off-switch is cancelling the whole orchestrator. Flagged as a follow-up task. Workaround this session: `temporal workflow signal -w sync-orchestrator --name stopWatch`.
+- Started uncapped AI drain, then while it ran: enqueued AI again (active duplicate), Covid (normal), Finance (`--next`).
+- Queue snapshot with AI active:
+  - `1473278992123846663 [urgent]` (Finance — enqueued last, placed first: `--next` confirmed against a live queue)
+  - `1549512566451445762 [normal]` (AI duplicate — **enqueued as a second entry while the same shape was actively running**; confirms the no-active-run-guard caveat live)
+  - `1471130970296303630 [normal]` (Covid)
+- Started `IMMIGRATION --next --watch --watch-interval 1` — urgent watch subscription active; awaiting repeat observations.
+- Priority/queue results (all confirmed from recent-children detail): execution order AI → Finance `[urgent]` → IMMIGRATION `[urgent]` → AI-dup `[normal]` → Covid `[normal]` → IMMIGRATION watch repeat `[urgent]`; one child at a time throughout; both IMMIGRATION children `[urgent]` — closes the `--next --watch` items. Active-duplicate observation recorded under Chunk 4.
+- IMMIGRATION has ≥20 live bookmarks on X (local cache said 4) — live counts confirm the stale-local-view assumption.
+- **Second regression found (fixed as dff7fdd)**: the AI drain exhausted the delete quota mid-run (~35 syncs in) and the coordinator **fast-failed every remaining queued delete at the rate-limiter pace** instead of pausing durably. Root cause: activities throw `RateLimitError`, which crosses the activity boundary wrapped as `ActivityFailure`→`ApplicationFailure`; the sync workflow ops carry the `extractRateLimitResetAt` unwrapper (`resolveRateLimitResetAt`) but the coordinator workflow ops never got it when delete ownership moved (a3af508/2cd4879). Detection failed → `withRateLimitRetry` treated 429s as plain failures → `recordDeleteFailure` per item → next. ~80 delete attempts burned as 429s; all children ended `stop=no-progress` (the drain loop's safety valve worked); `delete_queue` grew to 85 ready rows.
+- Sync-side observations during the storm: children completed fast with `stop=no-progress` (correct bail-out); orchestrator surfaced only a single `Last Error` line for ~80 failures (observability gap worth noting); fetch/store/enrich/media unaffected (separate quota).
+- Fix: added `extractRateLimitResetAt` to coordinator ops reusing `resolveRateLimitResetAt`; workflow-level regression test (wrapped RateLimitError → durable sleep + retry, no recorded failure). Stale coordinator singleton terminated again per the dev-mode policy; worker restarted.
+- Stopped the IMMIGRATION watch via `temporal workflow signal -w sync-orchestrator --name stopWatch` (no CLI surface exists — see UX finding above).
+- Re-enqueued all 7 approved folders (ascending size) **during** the rate-limited window as the live verification: the coordinator should pause durably until the 01:06:47 reset, auto-resume, and drain the 85-row backlog plus current batches.
+- **Fix verified live**: first delete hit the 429 at 00:58:59 → exactly ONE `Rate limited until` line → durable ~8-min pause → auto-resume at 01:07:01 (reset + buffer) → drained IMMIGRATION's 20-row backlog + current batches → quota re-exhausted after exactly 50 deletes → ONE new pause line until 01:21:49. Before the fix the same situation produced ~80 fast-fail lines in 90 seconds. Failed-delete log lines total 2 (one per pause boundary — the probing item is retried after the wait, not recorded as failed; coordinator `Total Failed: 0`).
+- **Measured delete quota: 50 per 15-min window (~200/hr)** — sets the wall-clock expectation for full drains; hundreds of live bookmarks per folder means many hours. Orchestrator/coordinator handle the cadence autonomously.
+- Note for Chunk 6: the durable pause is a natural worker-restart test point (kill worker mid-pause, confirm the timer survives).
+- **Chunk 6 worker-restart test (PASSED)**: killed and restarted the worker mid-pause (~01:10). Restarted worker replayed both singletons cleanly: coordinator paused with `Rate Limit Reset: 1:21:49 AM` intact and counters preserved (40 deleted / 0 failed), orchestrator queue of 6 + active child untouched. The durable timer then fired on schedule — backlog + current-batch jobs resumed at 01:21:57 (~8s after reset) on a worker process that did not exist when the timer was set. Status output surfacing the reset time post-restart is a nice observability win.
