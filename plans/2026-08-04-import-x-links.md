@@ -52,7 +52,7 @@ Imported links are not necessarily real X bookmarks, and every delete attempt sp
 - The backlog query (src/lib/db/bookmark-query-repo.ts:23) adds `AND origin != 'import'` — imported rows never reach the delete coordinator, so no quota is spent on links that may never have been bookmarks.
 - When a folder sync **re-observes** the same `(tweet_id, folder_id)` from X — proof it IS a real bookmark — the `upsertBookmark` re-seen/update path sets `origin = 'sync'`, and the row joins the normal archive-then-drain lifecycle from then on. No other code path needs to know origins exist.
 
-Enrichment: stubs are discovered by the standard `full_json IS NULL` scan. The report ends by suggesting `pnpm dev workflow start enrich --limit <n>` with the actual new-stub count.
+Enrichment: manual enrich is target-based (ADR 029). The report ends by suggesting a runnable `pnpm dev workflow start enrich --tweet-id <id> ...` command listing the actual enrichment candidates (fixed in `cd2710e` — the originally spec'd `--limit N` form was rejected by the CLI).
 
 ## Report (stdout)
 
@@ -62,7 +62,7 @@ Imported into "IDE" (1791238115379564827)
    3 already in folder
    2 already archived from other folders (added here too)
    1 line skipped: t.co link (resolve manually)
-Enrich: pnpm dev workflow start enrich --limit 12
+Enrich: pnpm dev workflow start enrich --tweet-id 2006481858289361339 --tweet-id 2006519723887046845 ...
 ```
 
 ## Out of scope (explicit)
@@ -145,6 +145,82 @@ No body, no trailers, no attribution lines. Do NOT push.
 
 Reply with: the commit SHA, files touched, test count added, and any spec deviation you had
 to make (with one-line justification). If the spec blocked you, stop and report instead of improvising.
+```
+
+## Follow-up: `--import-stubs` enrich discovery mode (handoff written 2026-08-05)
+
+Dozens of imports make the `--tweet-id` suggestion unwieldy. New discovery mode: `workflow start enrich --import-stubs` enriches every stub with an import-origin bookmark; the import report suggests `--tweet-id` flags for ≤5 candidates, else the short mode. Handoff prompt:
+
+```markdown
+Work in the x-bookmarks-scraper repo (github.com:abendy/x-bookmarks-scraper). Rebase your work
+onto latest develop before finalizing — linear history, no merge commits. Create a topic branch,
+run pnpm install. First read: CLAUDE.md, .claude/ts-style.md, .claude/ts-testing.md.
+
+Do not remove, inline, or reshape existing code to dodge lint limits. Do not make unrelated changes.
+
+## Environment facts
+
+Never run `pnpm dev auth`, live syncs, or Temporal servers/workers. All verification is offline:
+vitest with temp DBs (tests/db.test.ts pattern). Do not touch data/bookmarks.db.
+
+## Task — `--import-stubs` discovery mode for manual enrich
+
+Context: `pnpm dev import` lands stub bookmarks with `origin='import'` (ADR 034). Manual enrich
+is targets-or-maintenance only (ADR 029): `--tweet-id`/`--file`, or `--retry-unavailable`/
+`--outdated`. After large imports the suggested --tweet-id list is unwieldy. Add a third
+maintenance-style mode that discovers import stubs itself.
+
+1. CLI (src/commands/workflow/start-command/enrich.ts): add `--import-stubs`, mirroring
+   `--retry-unavailable`'s registration, validation, and display end to end. Exclusivity rules
+   (see the existing checks around enrich.ts:107-150): mutually exclusive with `--tweet-id`/
+   `--file` AND with `--retry-unavailable`/`--outdated`; composes with `--limit` and policy
+   flags exactly as --retry-unavailable does.
+2. Workflow input (src/temporal/shared/enrich-types.ts:70 area): `importStubs?: boolean`,
+   plumbed through src/temporal/workflows/enrich.ts the same way retryUnavailable is. Enrich
+   workflows are per-run (not singletons), so input additions are replay-safe; still: NO changes
+   to any other workflow file (orchestrator, delete-coordinator, sync).
+3. Discovery (src/temporal/activities/query.ts:58 getStubRecords + its repo query in
+   src/lib/db/tweet-query-repo.ts:54-66): when importStubs is set, select stubs
+   (`full_json IS NULL`, same unavailable_at/next_retry_at candidate conditions as the standard
+   stub selection) that have AT LEAST ONE bookmark row with `origin = 'import'` (EXISTS
+   subquery; DISTINCT tweets), honoring the existing limit. Add the query as a sibling/variant,
+   not by widening the default scan.
+4. Import report (src/commands/import.ts, formatImportReport + enrichmentCandidateIds): when
+   candidates ≤ 5 keep the current --tweet-id suggestion; when > 5 suggest exactly
+   `pnpm dev workflow start enrich --import-stubs`. Update tests, adding a >5-candidates case.
+5. README: extend the workflow-enrich notes with the new mode, one or two lines, matching the
+   existing style.
+
+## Hard constraints
+
+- Allowed writes: src/commands/workflow/start-command/enrich.ts, src/commands/import.ts,
+  src/temporal/shared/enrich-types.ts, src/temporal/workflows/enrich.ts (input plumbing only),
+  src/temporal/activities/query.ts, src/lib/db/tweet-query-repo.ts (+ the BookmarksDb facade in
+  src/lib/db/client.ts only if a new repo method must surface), src/types/**, tests/**, README.md.
+- No new dependencies. Semantics: --import-stubs must never enrich sync-origin stubs that lack an
+  import bookmark, and must skip unavailable/in-retry tweets like every other mode.
+
+## Verification (offline)
+
+1. pnpm lint && pnpm typecheck && pnpm test
+2. New tests: CLI exclusivity (--import-stubs + --tweet-id rejected; + --retry-unavailable
+   rejected); discovery selects import-origin stubs only (sync-origin stub excluded, already-
+   enriched import excluded, unavailable_at/next_retry_at excluded, limit respected,
+   multi-folder import counted once); workflow input plumbing (mirror the retryUnavailable cases
+   in tests/temporal-enrich-workflow.test.ts); import report threshold (5 → --tweet-id form,
+   6 → --import-stubs form).
+
+## Commit / PR
+
+Stage files by name. Conventional subject:
+feat(enrich): add --import-stubs discovery mode
+Optional 2-4 line body on the why. No trailers. Rebase onto latest develop, push the topic
+branch, open a PR against develop. No merge commits.
+
+## Report back
+
+PR number, files touched, test count added, and any spec deviation with one-line justification.
+If blocked, stop and report instead of improvising.
 ```
 
 ## Acceptance (owner checklist)
