@@ -203,8 +203,10 @@ maintenance-style mode that discovers import stubs itself.
   src/temporal/shared/enrich-types.ts and activity-types.ts (input-type extensions only);
   src/temporal/workflows/enrich/index.ts and enrich/records.ts (input plumbing only — no other
   files under workflows/enrich/, and the root enrich.ts facade stays untouched);
-  src/temporal/activities/query.ts; src/lib/db/tweet-query-repo.ts (+ the BookmarksDb facade in
-  src/lib/db/client.ts only if a new repo method must surface); src/types/**; tests/**; README.md.
+  src/temporal/activities/query.ts; src/lib/db/tweet-query-repo.ts; src/lib/db/tweet-repo.ts
+  (delegation only — added 2026-08-05 in the PR #13 review so the facade routes through TweetRepo
+  like every sibling); the BookmarksDb facade in src/lib/db/client.ts; src/types/**; tests/**;
+  README.md.
 - No new dependencies. Semantics: --import-stubs must never enrich sync-origin stubs that lack an
   import bookmark, and must skip unavailable/in-retry tweets like every other mode.
 
