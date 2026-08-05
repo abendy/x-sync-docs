@@ -90,7 +90,7 @@ Project was idle ~5 months after Session 5. Reality has changed:
 - **Audit `delete_queue` before the first delete-enabled run** — it holds 5-month-old queued deletes that the backlog phase will fire immediately.
 - Use `--no-delete` for ordering/queue assertions (Chunks 3/4); spend real deletes only where deletion is the subject (Chunks 2/5).
 - Draining hundreds of backlogged bookmarks means hundreds of rate-limited delete calls — plan long sessions.
-- **Once the safety-layers branch merges** (Mini worker: `X_BOOKMARKS_DB` + `archive_role` marker): `pnpm dev archive mark` on the live DB becomes the mandatory first step of every delete-enabled session — an unmarked DB degrades all syncs to `--no-delete` with one warning and an honest stop reason. Authority is **identity-bound** (hostname + realpath): backups, restores, and transferred copies arrive unmarked by design and need an explicit re-mark; if drains ever degrade unexpectedly mid-session, check `pnpm dev archive status` first (a hostname change unmarks — fail-safe direction). `mark` refuses to create a missing DB. Prefer merging between sessions, adding the mark step to Chunk 0 in the same commit of this doc.
+- **Safety layers MERGED 2026-08-05** (`789d1c5` + `4b3868e`, ADR 035): `pnpm dev archive mark` on the live DB — run by the OWNER, never an agent — is now the mandatory first step of every delete-enabled session; an unmarked DB degrades all syncs to `--no-delete` with one warning and an honest stop reason, deferring would-be deletes into `delete_queue`. Authority is **identity-bound** (hostname + realpath): backups, restores, and transferred copies arrive unmarked by design and need an explicit re-mark; if drains ever degrade unexpectedly mid-session, check `pnpm dev archive status` first (a hostname change unmarks — fail-safe direction). `mark` refuses to create a missing DB.
 - Litestream now replicates the live DB continuously (MBP LaunchAgent → rsync.net). Keep the `pnpm dev backup` pre-session habit regardless — instant local rollback needs no network.
 
 ### Revised execution order
@@ -124,6 +124,7 @@ For each: **Observed** / **Expected** / **Verdict (acceptable | follow-up)** / *
 - [x] Recon: size the live backlog (dry-run / small `--no-delete` fetch + folder list refresh); record live counts vs stale local view
 - [x] Smoke re-run of one small Chunk-1-style folder sync to revalidate the March checkmarks against the current code
   - Found + fixed a real regression: Temporal backlog delete phase was a silent no-op since 2cd4879 (see Session 6)
+- [ ] **(added 2026-08-05, post-ADR-035)** Owner runs `pnpm dev archive mark` on the live DB; `pnpm dev archive status` shows `primary` before any delete-enabled run. Also verify the marker survived any DB relocation since last session (identity-bound).
 
 ### Chunk 1: Baseline Regular Sync
 
