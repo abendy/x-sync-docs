@@ -55,7 +55,40 @@ dbs:
         snapshot-interval: 24h # daily full snapshot bounds restore time
 ```
 
-4. Start + persist: `brew services start litestream` (launchd-managed, matches the runtime-substrate convention).
+4. Start + persist — **not** `brew services` (neither the core formula nor the official tap ships a service definition; it errors with "formula not implemented plist", verified 2026-08-05). Write a launchd job instead:
+
+   `~/Library/LaunchAgents/io.litestream.replicate.plist`:
+
+   ```xml
+   <?xml version="1.0" encoding="UTF-8"?>
+   <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+   <plist version="1.0">
+   <dict>
+     <key>Label</key><string>io.litestream.replicate</string>
+     <key>ProgramArguments</key>
+     <array>
+       <string>/opt/homebrew/bin/litestream</string>
+       <string>replicate</string>
+       <string>-config</string>
+       <string>/opt/homebrew/etc/litestream.yml</string>
+     </array>
+     <key>RunAtLoad</key><true/>
+     <key>KeepAlive</key><true/>
+     <key>StandardOutPath</key><string>/opt/homebrew/var/log/litestream.log</string>
+     <key>StandardErrorPath</key><string>/opt/homebrew/var/log/litestream.log</string>
+   </dict>
+   </plist>
+   ```
+
+   ```bash
+   mkdir -p /opt/homebrew/var/log
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.litestream.replicate.plist
+   launchctl print gui/$(id -u)/io.litestream.replicate | head -5   # state = running
+   ```
+
+   After config edits: `launchctl kickstart -k gui/$(id -u)/io.litestream.replicate`. Remove with `launchctl bootout gui/$(id -u)/io.litestream.replicate`.
+
+   LaunchAgent assumes the Mini auto-logs into your account (gui domain). If it runs headless with no login session, use a LaunchDaemon instead: same plist plus `<key>UserName</key><string>abendy</string>`, placed at `/Library/LaunchDaemons/` via sudo, bootstrapped with `sudo launchctl bootstrap system /Library/LaunchDaemons/io.litestream.replicate.plist`.
 5. Verify:
    - `litestream databases` lists the DB; `litestream snapshots <db-path>` shows a snapshot after a minute.
    - Fire drill: `litestream restore -o /tmp/verify.db /Users/abendy/projects/x-bookmarks-scraper/data/bookmarks.db && sqlite3 /tmp/verify.db "PRAGMA integrity_check; SELECT COUNT(*) FROM bookmarks;"`
