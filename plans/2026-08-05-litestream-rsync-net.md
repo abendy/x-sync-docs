@@ -135,7 +135,7 @@ Native `litestream restore` from the sftp URL remains the zero-dependency fallba
 - [x] Fire-drill restore passes `PRAGMA integrity_check` — counts exactly match live archive (12,628 bookmarks / 15,500 tweets)
 - [x] rsync.net key enrolled (`~/.ssh/rsync-net-litestream`); borg key re-appended after the docs' scp recipe clobbered authorized_keys
 - [ ] Worker sync runs clean while replication is active (verify on next live sync)
-- [ ] Mini cutover: bootout MBP agent → transfer DB → start Mini agent with `nigiri` paths (never both at once)
+- [ ] Mini cutover: bootout MBP agent → transfer DB → start Mini agent with `nigiri` paths (never both at once) → **`pnpm dev archive mark` on the Mini** — delete authority is identity-bound (hostname + realpath, PR #12), so the transferred DB arrives unmarked by design; same applies to any Litestream restore to a new path
 
 ## Handoff prompt — safety layers 2+3 (runs on the Mini)
 
