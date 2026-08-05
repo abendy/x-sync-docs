@@ -83,6 +83,8 @@ Project was idle ~5 months after Session 5. Reality has changed:
 
 ### Rules of engagement (live account)
 
+- **HOLD (owner, 2026-08-05): all work and testing paused until the in-flight work branches merge** (notably `topic/archive-safety`). Chunk 7 items 2-5 do not proceed until the owner lifts the hold. Delete-enabled runs thereafter require a fresh, explicit per-session go naming the folder — prior standing approvals are expired.
+
 - **Backup before every delete-enabled session**: `pnpm dev backup` (writes to `./data/backups/`).
 - **All proper live runs are folder syncs until folders are fully drained.** Delete is global and a no-folder sync does not preserve which folder a post was saved under — a no-folder delete run can destroy folder membership that was never archived. No-folder usage before then is limited to `--dry-run` / `--no-delete` recon. Delete-enabled no-folder runs (Chunks 2+5) come only after folder drains are complete.
 - **Audit `delete_queue` before the first delete-enabled run** — it holds 5-month-old queued deletes that the backlog phase will fire immediately.
