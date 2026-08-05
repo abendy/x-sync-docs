@@ -32,9 +32,11 @@ Verified: SFTP is a first-class replica type in current Litestream (v0.5.x) with
 
 ## Topology
 
-- **Mini** (always-on primary, runs worker + Temporal): `litestream replicate` as a service. Only machine that writes the DB, only machine that replicates.
+- **Target state — Mini** (always-on primary, runs worker + Temporal): `litestream replicate` as a service. Only machine that writes the DB, only machine that replicates.
 - **rsync.net**: replica home at `litestream/x-bookmarks/bookmarks.db` under the account root.
 - **MBP**: restore-only. Never run `replicate` here against the same replica path — two replicators on one lineage corrupt the generation history.
+- **Interim state (until the DB transfer):** the live archive is still on the MBP, so the replicate service runs on the **MBP** first — same plist, same config shape, local paths. The Mini's unit can be staged but should stay booted out (`launchctl bootout`) until the DB moves; at cutover, stop the MBP service, transfer the DB, start the Mini service. The single-replicator rule spans the cutover: never both at once.
+- **Per-machine paths:** the Mini's user is `nigiri`, the MBP's is `abendy` — every path in litestream.yml (db path, key-path) must use that machine's home directory. Do not copy a config across machines unedited.
 
 ## Mini setup (run there, or via `ssh mini`)
 
