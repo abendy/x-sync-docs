@@ -116,12 +116,26 @@ The yml + launchd service are machine config → dotfiles repo (`~/projects/dotf
 - Litestream replicates committed state continuously — a bad write replicates too; that is what `-timestamp` restore and the 30-day retention are for.
 - The existing `data/backups/` snapshots and `pnpm dev backup` are unaffected and still recommended before delete-enabled runs.
 
-## Acceptance
+## Restore performance + DR recipe (measured 2026-08-05, MBP)
 
-- [ ] `litestream snapshots` shows an rsync.net snapshot from the Mini
-- [ ] Fire-drill restore passes `PRAGMA integrity_check` with plausible row counts
-- [ ] Worker sync runs clean while replication is active
-- [ ] MBP one-liner restore documented in dotfiles and tested once
+Litestream's native `restore` over SFTP single-streams at ~60 KB/s against rsync.net (69 ms RTT; Go sftp client, one 56 MB LTX file, `-parallelism` only spans multiple files) — 30+ min and killed. OpenSSH transfers the same data in seconds. **Primary DR recipe:**
+
+```bash
+rsync -a --rsh="ssh -i ~/.ssh/rsync-net-litestream -o IdentitiesOnly=yes" \
+  de2769@de2769.rsync.net:litestream/x-bookmarks/ /tmp/replica/     # 5.3 s measured
+litestream restore -o restored.db "file:///tmp/replica/bookmarks.db" # 1.0 s measured
+sqlite3 restored.db "PRAGMA integrity_check;"
+```
+
+Native `litestream restore` from the sftp URL remains the zero-dependency fallback. Config gotchas baked into the working setup: install from the tap (`brew install benbjohnson/litestream/litestream` — not in homebrew-core), v0.5 singular `replica:` block with `url:` form, pin the **ecdsa-sha2-nistp256** host key (Go negotiates ECDSA, not ed25519), and SFTP URL paths are absolute (`/data1/home/de2769/...`).
+
+## Status (2026-08-05)
+
+- [x] Replication live on the MBP (interim primary): LaunchAgent `io.litestream.replicate`, initial 56 MB LTX uploaded, replica txid in lockstep
+- [x] Fire-drill restore passes `PRAGMA integrity_check` — counts exactly match live archive (12,628 bookmarks / 15,500 tweets)
+- [x] rsync.net key enrolled (`~/.ssh/rsync-net-litestream`); borg key re-appended after the docs' scp recipe clobbered authorized_keys
+- [ ] Worker sync runs clean while replication is active (verify on next live sync)
+- [ ] Mini cutover: bootout MBP agent → transfer DB → start Mini agent with `nigiri` paths (never both at once)
 
 ## Handoff prompt — safety layers 2+3 (runs on the Mini)
 
