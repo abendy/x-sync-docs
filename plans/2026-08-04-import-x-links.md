@@ -170,15 +170,19 @@ is targets-or-maintenance only (ADR 029): `--tweet-id`/`--file`, or `--retry-una
 `--outdated`. After large imports the suggested --tweet-id list is unwieldy. Add a third
 maintenance-style mode that discovers import stubs itself.
 
-1. CLI (src/commands/workflow/start-command/enrich.ts): add `--import-stubs`, mirroring
-   `--retry-unavailable`'s registration, validation, and display end to end. Exclusivity rules
-   (see the existing checks around enrich.ts:107-150): mutually exclusive with `--tweet-id`/
-   `--file` AND with `--retry-unavailable`/`--outdated`; composes with `--limit` and policy
-   flags exactly as --retry-unavailable does.
-2. Workflow input (src/temporal/shared/enrich-types.ts:70 area): `importStubs?: boolean`,
-   plumbed through src/temporal/workflows/enrich.ts the same way retryUnavailable is. Enrich
-   workflows are per-run (not singletons), so input additions are replay-safe; still: NO changes
-   to any other workflow file (orchestrator, delete-coordinator, sync).
+1. CLI: register `--import-stubs` in src/commands/workflow/start-command/register.ts (mirror
+   --retry-unavailable's registration) and type it in start-command/types.ts (StartOptions);
+   validation/display live in start-command/enrich.ts — exclusivity rules (existing checks
+   around enrich.ts:107-150): mutually exclusive with `--tweet-id`/`--file` AND with
+   `--retry-unavailable`/`--outdated`; composes with `--limit` and policy flags exactly as
+   --retry-unavailable does.
+2. Workflow input: `importStubs?: boolean` in src/temporal/shared/enrich-types.ts (:70 area,
+   beside retryUnavailable) and the query-side input in src/temporal/shared/activity-types.ts
+   (GetStubRecordsInput, :86); plumb through src/temporal/workflows/enrich/index.ts and
+   enrich/records.ts the same way retryUnavailable flows (enrich.ts at the workflows root is a
+   re-export facade — leave it untouched). Enrich workflows are per-run (not singletons), so
+   input additions are replay-safe; still: NO changes to any other workflow (orchestrator,
+   delete-coordinator, sync).
 3. Discovery (src/temporal/activities/query.ts:58 getStubRecords + its repo query in
    src/lib/db/tweet-query-repo.ts:54-66): when importStubs is set, select stubs
    (`full_json IS NULL`, same unavailable_at/next_retry_at candidate conditions as the standard
@@ -193,10 +197,14 @@ maintenance-style mode that discovers import stubs itself.
 
 ## Hard constraints
 
-- Allowed writes: src/commands/workflow/start-command/enrich.ts, src/commands/import.ts,
-  src/temporal/shared/enrich-types.ts, src/temporal/workflows/enrich.ts (input plumbing only),
-  src/temporal/activities/query.ts, src/lib/db/tweet-query-repo.ts (+ the BookmarksDb facade in
-  src/lib/db/client.ts only if a new repo method must surface), src/types/**, tests/**, README.md.
+- Allowed writes (corrected 2026-08-05 after worker flagged layout drift):
+  src/commands/workflow/start-command/enrich.ts, register.ts (option registration only, append),
+  types.ts (StartOptions extension only); src/commands/import.ts;
+  src/temporal/shared/enrich-types.ts and activity-types.ts (input-type extensions only);
+  src/temporal/workflows/enrich/index.ts and enrich/records.ts (input plumbing only — no other
+  files under workflows/enrich/, and the root enrich.ts facade stays untouched);
+  src/temporal/activities/query.ts; src/lib/db/tweet-query-repo.ts (+ the BookmarksDb facade in
+  src/lib/db/client.ts only if a new repo method must surface); src/types/**; tests/**; README.md.
 - No new dependencies. Semantics: --import-stubs must never enrich sync-origin stubs that lack an
   import bookmark, and must skip unavailable/in-retry tweets like every other mode.
 
