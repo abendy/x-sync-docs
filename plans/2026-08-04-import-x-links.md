@@ -19,8 +19,8 @@ pnpm dev import --folder <name-or-id> --dry-run [file]
 
 - `[file]` is a path to a text file; omitted → read stdin (paste, then Ctrl-D). One link per line; blank lines and `#` comments skipped.
 - `--folder` is required. Resolution:
-  1. `resolveFolderArg(db, arg)` (src/lib/resolve-folder.ts:5) against existing local folders — same UX as `sync <folder>`.
-  2. No match → treat the argument as a **new folder name**: create it via `upsertFolder(id, name)` (src/lib/db/folder-repo.ts:21) with generated id `local:<kebab-of-name>`. The `local:` prefix cannot collide with X's numeric folder ids.
+  1. `resolveFolderArg(db, arg)` (src/lib/resolve-folder.ts:5) against existing local folders — same UX as `sync <folder>`. Imports land **directly in the real folder under its X id**; no parallel/local id scheme.
+  2. No match → treat the argument as a **new folder name**: create it via `upsertFolder(name, name)` (src/lib/db/folder-repo.ts:21) — the established placeholder convention (`ensureFolderExists` already inserts id==name rows; ADR-noted "folder name may equal id"). If a folder with that name later appears on X with a numeric id it will be a distinct row; acceptable for one-shot.
   3. Ambiguous name → list candidates and exit non-zero (mirror existing resolve behavior).
 - `--dry-run` parses and classifies, prints the report, writes nothing.
 
@@ -39,16 +39,25 @@ Rejected with a per-line reason in the report: `t.co` short links (no network re
 Per parsed id, inside one transaction:
 
 1. `upsertPartialTweet({ id, ... })` — tweet-write-repo.ts:129. COALESCE semantics preserve any existing data; already-synced tweets no-op.
-2. `upsertBookmark(id, folderId)` — bookmark-write-repo.ts:16; returns whether a row was created → drives the new-vs-already-in-folder counts.
+2. `upsertBookmark(id, folderId, origin)` — bookmark-write-repo.ts:16, extended with an origin parameter (see below); returns whether a row was created → drives the new-vs-already-in-folder counts.
 
-Nothing else: no delete_queue entries, no sync_state, no workflow starts. Imported rows have `deleted_from_x = 0` and no folder-sync exposure — `local:` folders have no X-side counterpart, so drain syncs can never target them (`sync local:...` fails folder resolution against X; acceptable for one-shot, no guard code required).
+Nothing else: no delete_queue entries, no sync_state, no workflow starts by the import command itself.
+
+### Provenance + drain exclusion (owner decision 2026-08-05)
+
+Imported links are not necessarily real X bookmarks, and every delete attempt spends API quota (~50 deletes/15 min measured). Mechanism:
+
+- `bookmarks` gains `origin TEXT NOT NULL DEFAULT 'sync'` — added to the CREATE TABLE in schema.ts for fresh DBs plus an idempotent runtime `ALTER TABLE` for existing DBs, following the established ensure-column pattern (src/lib/db/media-repo.ts `ensureLocalPathColumn` is the model).
+- Import writes `origin = 'import'`.
+- The backlog query (src/lib/db/bookmark-query-repo.ts:23) adds `AND origin != 'import'` — imported rows never reach the delete coordinator, so no quota is spent on links that may never have been bookmarks.
+- When a folder sync **re-observes** the same `(tweet_id, folder_id)` from X — proof it IS a real bookmark — the `upsertBookmark` re-seen/update path sets `origin = 'sync'`, and the row joins the normal archive-then-drain lifecycle from then on. No other code path needs to know origins exist.
 
 Enrichment: stubs are discovered by the standard `full_json IS NULL` scan. The report ends by suggesting `pnpm dev workflow start enrich --limit <n>` with the actual new-stub count.
 
 ## Report (stdout)
 
 ```
-Imported into "Harness Config" (local:harness-config)
+Imported into "IDE" (1791238115379564827)
   12 new bookmarks (12 new stubs)
    3 already in folder
    2 already archived from other folders (added here too)
@@ -65,7 +74,7 @@ Browser/Notes connectors, non-X links, a general links store, t.co resolution, e
 The import feature writes to whatever `data/bookmarks.db` it runs against; it neither depends on nor changes this decision.
 
 - **Recommended: single-home the DB on the Mini.** The dada.stream runtime substrate (ADR-012) already designates the Mini as the always-on primary running services over Tailscale. Worker + Temporal + `bookmarks.db` live there; the MBP runs commands via SSH (`ssh mini 'cd ~/projects/x-bookmarks-scraper && pnpm dev import ...'` — or paste-import from the MBP by piping stdin through ssh). Zero code changes, single-writer discipline preserved.
-- **Optional durability add-on:** Litestream replicating the Mini's DB to S3/R2 — continuous backup + point-in-time restore, still single-writer.
+- **Decided 2026-08-05 — Litestream to rsync.net:** continuous replication from the Mini over SFTP, MBP restores copies on demand. Own plan: `.project/plans/2026-08-05-litestream-rsync-net.md`.
 - **Rejected for now: cloud DB (Turso/libSQL).** True multi-machine writes, but the entire repo layer is synchronous better-sqlite3 (package.json ^12.9.0); libSQL's client is async — a full db-layer refactor. That decision belongs to the dada.stream migration, not a one-shot feature.
 - **Do not** put `bookmarks.db` in iCloud Drive/Syncthing: file-level sync of a live WAL database is a corruption generator, and two writers would silently clobber.
 
@@ -87,10 +96,17 @@ Parsing rules, Write path, Report. Follow it exactly; Out of scope means out of 
 
 ## Grounding (already verified)
 
-- Folder resolution: resolveFolderArg(db, arg) — src/lib/resolve-folder.ts:5
-- New named folders: upsertFolder(id, name) — src/lib/db/folder-repo.ts:21; id scheme local:<kebab-name>
+- Folder resolution: resolveFolderArg(db, arg) — src/lib/resolve-folder.ts:5. Imports land in the
+  real folder under its X id — no parallel id scheme.
+- New named folders: upsertFolder(name, name) — src/lib/db/folder-repo.ts:21 (id==name placeholder,
+  same convention as ensureFolderExists at folder-repo.ts:11)
 - Stub write: upsertPartialTweet(...) — src/lib/db/tweet-write-repo.ts:129 (COALESCE-preserving)
-- Bookmark write: upsertBookmark(tweetId, folderId): boolean — src/lib/db/bookmark-write-repo.ts:16
+- Bookmark write: upsertBookmark(tweetId, folderId): boolean — src/lib/db/bookmark-write-repo.ts:16.
+  Extend with origin ('sync' default | 'import'); the re-seen/update path must set origin='sync'.
+- New column: bookmarks.origin TEXT NOT NULL DEFAULT 'sync' — schema.ts CREATE TABLE + idempotent
+  runtime ALTER for existing DBs (model: src/lib/db/media-repo.ts ensureLocalPathColumn).
+- Backlog exclusion: add AND origin != 'import' to the backlog query —
+  src/lib/db/bookmark-query-repo.ts:23. No other query changes.
 - Command wiring: src/cli/program.ts (createProgram) — register `import` alongside existing commands;
   follow the structure of an existing simple command (e.g. folder or browse) for layout under src/commands/.
 
@@ -100,17 +116,23 @@ Parsing rules, Write path, Report. Follow it exactly; Out of scope means out of 
   or any workflow — live singletons may be running.
 - No new dependencies.
 - No writes outside: src/commands/** (new import command), src/cli/program.ts (registration),
+  src/lib/db/schema.ts + src/lib/db/bookmark-write-repo.ts + src/lib/db/bookmark-query-repo.ts
+  (origin column, exactly as specified in the plan — nothing else in the db layer),
   src/types/** (only if a type is genuinely needed), tests/**.
-- The command must never enqueue deletes or touch delete_queue/sync_state.
+- The command must never enqueue deletes or touch delete_queue/sync_state. Drain exclusion works
+  ONLY via the origin column as specified — do not filter the delete coordinator or sync engine
+  directly.
 
 ## Verification (no live infra required)
 
 1. pnpm lint && pnpm typecheck && pnpm test
 2. New tests/import-command.test.ts covering: URL forms (user/status, /i/status, bare id,
    query-string strip), t.co and non-X rejection with reasons, in-input dedupe, existing-folder
-   resolution, new-folder creation (local: id), already-known tweet → bookmark row only,
-   --dry-run writes nothing, report counts. Use a temp SQLite db per test (see tests/db.test.ts
-   for the established pattern).
+   resolution, new-folder creation (id==name placeholder), already-known tweet → bookmark row only,
+   --dry-run writes nothing, report counts. Origin coverage: import rows get origin='import';
+   sync-path rows default 'sync'; backlog query excludes 'import' rows; re-observed import flips
+   to 'sync' and appears in backlog. Runtime migration: opening a pre-column DB adds the column
+   idempotently. Use a temp SQLite db per test (see tests/db.test.ts for the established pattern).
 3. Manual smoke against a THROWAWAY copy: cp data/bookmarks.db /tmp/import-smoke.db and run
    the command with a 3-line paste against it (never the real data/bookmarks.db).
 
@@ -127,6 +149,7 @@ to make (with one-line justification). If the spec blocked you, stop and report 
 
 ## Acceptance (owner checklist)
 
-- [ ] `pnpm dev import --folder "Harness Config" --dry-run links.txt` classifies correctly
-- [ ] Real run creates folder `local:harness-config`, stubs appear via `pnpm dev status` / browse
+- [ ] `pnpm dev import --folder IDE --dry-run links.txt` classifies correctly
+- [ ] Real run lands bookmarks in the chosen X folder (or creates the named placeholder folder); stubs appear via `pnpm dev status` / browse
+- [ ] Imported rows carry `origin='import'` and do NOT appear in the next drain sync's backlog; a sync-re-observed one flips to `'sync'`
 - [ ] `workflow start enrich` fills them; they show up in the next digest
