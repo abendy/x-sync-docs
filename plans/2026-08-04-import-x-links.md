@@ -2,7 +2,7 @@
 
 Date: 2026-08-04
 Repository: x-bookmarks-scraper
-Status: Ready — supersedes the broader browser/notes draft (deleted); one environment decision (D5) tracked separately below, does not block the feature
+Status: In Review — implemented and merged (PR #11 squash `cb4a3fa`, delete-queue guard follow-up `f7034b4`, ADR 034); owner acceptance checklist below still open. D5 tracked separately; typed ResolveResult discriminant remains a follow-up.
 
 > Scope note: the owner suspended the 2026-04-27 feature pause for this feature. One-shot: build it, use it, move on.
 
