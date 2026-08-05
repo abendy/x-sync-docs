@@ -88,6 +88,8 @@ Project was idle ~5 months after Session 5. Reality has changed:
 - **Audit `delete_queue` before the first delete-enabled run** — it holds 5-month-old queued deletes that the backlog phase will fire immediately.
 - Use `--no-delete` for ordering/queue assertions (Chunks 3/4); spend real deletes only where deletion is the subject (Chunks 2/5).
 - Draining hundreds of backlogged bookmarks means hundreds of rate-limited delete calls — plan long sessions.
+- **Once the safety-layers branch merges** (Mini worker: `X_BOOKMARKS_DB` + `archive_role` marker): `pnpm dev archive mark` on the live DB becomes the mandatory first step of every delete-enabled session — an unmarked DB silently degrades all syncs to `--no-delete` with a warning. Until it merges, nothing changes. Prefer merging it between sessions, adding the mark step to Chunk 0 in the same commit of this doc.
+- Litestream now replicates the live DB continuously (MBP LaunchAgent → rsync.net). Keep the `pnpm dev backup` pre-session habit regardless — instant local rollback needs no network.
 
 ### Revised execution order
 
@@ -189,6 +191,16 @@ Fold these into Chunk 2-5 runs rather than spending separate API calls.
 - [x] Worker restart: kill the worker mid-sync; restart; confirm the sync resumes and completes without data loss (Session 7: killed mid-rate-limit-pause; restarted worker replayed both singletons with timer/counters/queue intact and the durable timer fired on schedule at 01:21:57)
 - [x] Delete-coordinator control: `workflow pause delete-coordinator` mid-drain, confirm the drain halts; `resume`, confirm it continues; status output stays truthful throughout
   - Session 7 (01:37): paused mid-active-window — deletes stopped at the in-flight item (05:37:15), verified 15s+ of silence; status correctly showed execution `RUNNING` / progress `paused` with truthful counters (130 deleted). Resume → deletes flowing again within ~1s, status `running`. PASSED.
+
+### Chunk 7: Intake from import/origin + Litestream work (added 2026-08-05)
+
+Context: `feat(import)` merged (PR #11 + `f7034b4`, ADR 034 — `bookmarks.origin` gates all three delete feeds); Litestream replication live on the MBP (`.project/plans/2026-08-05-litestream-rsync-net.md`). Fold these into the next session's runs — only item 3 spends deletes, and those were being spent anyway.
+
+- [ ] **First app open migrates the schema**: nothing has opened the live DB through the app since the merge, so the first CLI/worker start adds `bookmarks.origin`. Afterwards: `PRAGMA table_info(bookmarks)` shows `origin` default `'sync'`, and the Litestream log advances txid on the change.
+- [ ] **Backlog phase revalidation post-origin-guard**: three delete-feed queries now carry `origin != 'import'`; all pre-existing rows default `'sync'`, so the first drain's `Backlog ready: N` must match the `delete_queue` audit exactly (Session-6 lesson: smoke the changed SQL, don't trust old green checkmarks).
+- [ ] **Import acceptance ride-along** (closes the import plan's last box): import two links into a folder about to be drained — one that IS a live X bookmark in that folder, one that isn't. Expected: the non-bookmark import survives the whole drain (`origin='import'`, never queued, zero quota); the real one is re-observed by the fetch, flips to `'sync'`, and drains normally. Note: imports never appear in `folder-sync-report` "new" counts (it keys on `sync_log`).
+- [ ] **Litestream soak** (closes the durability plan's open box): during drains, worker logs show no `database is locked`; litestream log stays in txid lockstep through delete storms; `data/bookmarks.db-wal` drains rather than growing unboundedly (litestream owns checkpointing now).
+- [ ] **Safety-layers sequencing decided explicitly** when the Mini worker's SHA arrives — see rules of engagement.
 
 ## Notes To Capture While Testing (answered 2026-08-04, Sessions 6-8)
 
