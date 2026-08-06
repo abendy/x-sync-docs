@@ -2,7 +2,7 @@
 
 Date: 2026-08-04
 Repository: x-bookmarks-scraper
-Status: In Review — implemented and merged (PR #11 squash `cb4a3fa`, delete-queue guard follow-up `f7034b4`, ADR 034); owner acceptance checklist below still open. D5 tracked separately; typed ResolveResult discriminant remains a follow-up.
+Status: Complete (2026-08-05) — PR #11 (`cb4a3fa` + `f7034b4`, ADR 034), enrich-suggestion fix (`cd2710e`), `--import-stubs` discovery mode (PR #13, rebase-merged as `0be3970`). Owner acceptance passed live: dry-run classify, real import into CONTEXT GRAPH, origin='import' verified delete-proof in the DB, `--import-stubs` enriched all 3 stubs, full content in browse. Remaining elsewhere: the drain ride-along observation (testing checklist Chunk 7 item 3) and the typed ResolveResult discriminant follow-up. D5 tracked in the Litestream plan.
 
 > Scope note: the owner suspended the 2026-04-27 feature pause for this feature. One-shot: build it, use it, move on.
 

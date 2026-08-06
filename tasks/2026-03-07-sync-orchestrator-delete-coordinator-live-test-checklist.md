@@ -92,6 +92,7 @@ Project was idle ~5 months after Session 5. Reality has changed:
 - Draining hundreds of backlogged bookmarks means hundreds of rate-limited delete calls — plan long sessions.
 - **Safety layers MERGED 2026-08-05** (`789d1c5` + `4b3868e`, ADR 035): `pnpm dev archive mark` on the live DB — run by the OWNER, never an agent — is now the mandatory first step of every delete-enabled session; an unmarked DB degrades all syncs to `--no-delete` with one warning and an honest stop reason, deferring would-be deletes into `delete_queue`. Authority is **identity-bound** (hostname + realpath): backups, restores, and transferred copies arrive unmarked by design and need an explicit re-mark; if drains ever degrade unexpectedly mid-session, check `pnpm dev archive status` first (a hostname change unmarks — fail-safe direction). `mark` refuses to create a missing DB.
 - Litestream now replicates the live DB continuously (MBP LaunchAgent → rsync.net). Keep the `pnpm dev backup` pre-session habit regardless — instant local rollback needs no network.
+- **Restart the worker after ANY merge or branch switch** — a running worker keeps its loaded code forever; the CLI loads fresh per invocation, so the two silently diverge. Observed 2026-08-05: a pre-merge worker ignored `--import-stubs` inputs and completed instantly while the CLI printed the new mode. Check `ps -o lstart= -p $(pgrep -f "tsx src/temporal/worker.ts")` against the last merge time when workflows behave as no-ops.
 
 ### Revised execution order
 
