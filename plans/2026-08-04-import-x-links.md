@@ -233,6 +233,83 @@ PR number, files touched, test count added, and any spec deviation with one-line
 If blocked, stop and report instead of improvising.
 ```
 
+## Follow-up 2: auto-run enrichment after import (handoff written 2026-08-05)
+
+Owner decisions: the report always suggests `--import-stubs` (threshold removed in `65eb0f7` — one memorable command), and import should now auto-start that enrichment when possible. The zero-infra property survives as the fallback: import must never fail because Temporal is down.
+
+```markdown
+Work in the x-bookmarks-scraper repo (github.com:abendy/x-bookmarks-scraper). Rebase onto latest
+develop before finalizing — linear history, no merge commits. Topic branch, pnpm install.
+First read: CLAUDE.md, .claude/ts-style.md, .claude/ts-testing.md.
+
+Do not remove, inline, or reshape existing code to dodge lint limits. Do not make unrelated changes.
+
+## Environment facts
+
+Never run `pnpm dev auth`, live syncs, or Temporal servers/workers. Verification is offline:
+vitest with temp DBs and mocked Temporal clients. Do not touch data/bookmarks.db.
+
+## Task — import auto-starts import-stubs enrichment, with graceful fallback
+
+Context: `pnpm dev import` currently ends by SUGGESTING `pnpm dev workflow start enrich
+--import-stubs`. It should now attempt to START that workflow itself. The zero-infra guarantee
+is non-negotiable: when Temporal is unreachable, import prints the suggestion exactly as today
+and exits 0.
+
+1. Extract a reusable starter from src/commands/workflow/start-command/enrich.ts for the
+   no-flags `--import-stubs` default path (input construction around enrich.ts:160-200:
+   resolveEnrichPolicyForWorkflow → resolveManualPolicyLane → computePolicySnapshotHash →
+   EnrichWorkflowInput with importStubs: true, batchSize 10 defaults → capability plan →
+   workflow start). The CLI command's behavior and output must not change — it calls the
+   extracted function. The extracted function accepts a Temporal client and returns
+   { workflowId } (or similar) so callers control printing. Touch
+   src/commands/workflow/start-command/handlers.ts only if the extraction genuinely requires
+   it, minimally.
+2. src/commands/import.ts: after a successful REAL import with enrichment candidates and
+   without --no-enrich, call the starter inside `withTemporalClient`
+   (src/temporal/client.ts — read-only; catch TemporalUnavailableError plus generic errors).
+   Success → replace the suggestion line with:
+     Enrichment started: <workflow-id>
+     Monitor: pnpm dev workflow status <workflow-id>
+   Failure → print exactly the current suggestion line, prefixed by one short note that
+   Temporal is unreachable. Exit code stays 0 either way — the import itself succeeded.
+   Keep the connection attempt snappy if the client supports a timeout option; if not, accept
+   the default and note it in the PR body.
+3. New flag `--no-enrich` (skip the auto-start, print the suggestion). `--dry-run` never
+   attempts any Temporal contact — assert this.
+4. README: update the Import notes (auto-start behavior, --no-enrich, fallback) and the Quick
+   Start if it mentions the two-step flow.
+
+## Hard constraints
+
+- Allowed writes: src/commands/import.ts; src/commands/workflow/start-command/enrich.ts
+  (extraction only, zero CLI behavior change); src/commands/workflow/start-command/handlers.ts
+  (only if extraction requires, minimal); src/commands/shared/temporal.ts (optional non-exiting
+  helper); src/types/**; tests/**; README.md. Nothing under src/temporal/** except reading.
+- No new dependencies. The enrich defaults must come from the shared extraction — no duplicated
+  input construction in import.ts.
+
+## Verification (offline)
+
+1. pnpm lint && pnpm typecheck && pnpm test
+2. New tests (mock the Temporal client module): success path starts the workflow with
+   importStubs: true input and prints "Enrichment started"; TemporalUnavailableError path prints
+   the fallback suggestion and exits 0; --no-enrich skips client contact entirely; --dry-run
+   makes zero Temporal contact; zero-candidates import makes zero Temporal contact; the CLI
+   `workflow start enrich --import-stubs` output is byte-identical to before (regression).
+
+## Commit / PR
+
+Stage by name. Subject: feat(import): auto-start import-stubs enrichment when Temporal is up
+Optional 2-4 line body. No trailers. Rebase onto latest develop, push topic branch, open PR
+against develop. No merge commits.
+
+## Report back
+
+PR number, files touched, test count added, any spec deviation with one-line justification.
+If blocked, stop and report instead of improvising.
+```
+
 ## Acceptance (owner checklist)
 
 - [ ] `pnpm dev import --folder IDE --dry-run links.txt` classifies correctly
